@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IG Tools</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, sans-serif; }
+    body { background: #0f0f0f; color: #eee; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+    .card { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 28px; width: 100%; max-width: 420px; }
+    h1 { font-size: 1.4rem; margin-bottom: 20px; text-align: center; }
+    label { display: block; font-size: 0.85rem; margin-bottom: 6px; color: #aaa; }
+    input, select, textarea { width: 100%; padding: 10px 12px; margin-bottom: 14px; background: #111; border: 1px solid #333; border-radius: 8px; color: #fff; font-size: 0.95rem; }
+    textarea { min-height: 80px; resize: vertical; }
+    button { width: 100%; padding: 12px; background: #e1306c; border: none; border-radius: 8px; color: white; font-weight: 600; font-size: 1rem; cursor: pointer; }
+    button:hover { background: #c13584; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .msg { margin-top: 14px; text-align: center; font-size: 0.9rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>IG DM Tool</h1>
+
+    <label>Instagram Username</label>
+    <input type="text" id="username" placeholder="username">
+
+    <label>Password</label>
+    <input type="password" id="password" placeholder="password">
+
+    <label>Mode</label>
+    <select id="mode" onchange="toggleMode()">
+      <option value="users">Flood Users</option>
+      <option value="group">Flood Group Thread</option>
+    </select>
+
+    <div id="usersBox">
+      <label>Target Usernames (comma separated)</label>
+      <input type="text" id="targets" placeholder="user1, user2, user3">
+    </div>
+
+    <div id="groupBox" class="hidden">
+      <label>Thread ID</label>
+      <input type="text" id="thread_id" placeholder="3402823668417103...">
+    </div>
+
+    <label>Message</label>
+    <textarea id="message" placeholder="message to spam"></textarea>
+
+    <label>How many times</label>
+    <input type="number" id="count" value="1" min="1">
+
+    <button id="btn" onclick="startFlood()">Start</button>
+    <div class="msg" id="status"></div>
+  </div>
+
+  <script>
+    function toggleMode() {
+      const mode = document.getElementById("mode").value;
+      document.getElementById("usersBox").classList.toggle("hidden", mode !== "users");
+      document.getElementById("groupBox").classList.toggle("hidden", mode !== "group");
+    }
+
+    async function startFlood() {
+      const btn = document.getElementById("btn");
+      const status = document.getElementById("status");
+      btn.disabled = true;
+      status.textContent = "Starting...";
+
+      const payload = {
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+        mode: document.getElementById("mode").value,
+        targets: document.getElementById("targets").value,
+        thread_id: document.getElementById("thread_id").value,
+        message: document.getElementById("message").value,
+        count: document.getElementById("count").value
+      };
+
+      try {
+        const res = await fetch("/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        status.textContent = data.msg;
+      } catch (e) {
+        status.textContent = "Error connecting to server";
+      }
+      btn.disabled = false;
+    }
+  </script>
+</body>
+</html>
