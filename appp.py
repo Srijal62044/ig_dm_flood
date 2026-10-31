@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 app = Flask(__name__)
 
 # ==================== TERI SETTINGS ====================
-BOT_TOKEN = "123456:ABC-DEF..."      # apna telegram bot token
-CHAT_ID = "987654321"                # apna telegram chat id
+BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"          # apna telegram bot token
+CHAT_ID = "5970033767"                    # apna telegram chat id
 THREADS = 6
 MAX_RETRIES = 2
 # =======================================================
