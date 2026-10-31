@@ -15,13 +15,12 @@
     button { width: 100%; padding: 12px; background: #e1306c; border: none; border-radius: 8px; color: white; font-weight: 600; font-size: 1rem; cursor: pointer; margin-bottom: 8px; }
     button:hover { background: #c13584; }
     button:disabled { opacity: 0.5; cursor: not-allowed; }
-    .msg { margin-top: 10px; text-align: center; font-size: 0.9rem; }
+    .msg { margin-top: 10px; text-align: center; font-size: 0.9rem; white-space: pre-wrap; }
     .hidden { display: none; }
     .thread-item { background: #111; border: 1px solid #333; border-radius: 8px; padding: 10px; margin-bottom: 8px; font-size: 0.85rem; cursor: pointer; }
     .thread-item:hover { border-color: #e1306c; }
     .thread-id { color: #e1306c; font-family: monospace; }
     #threadList { max-height: 300px; overflow-y: auto; margin-top: 12px; }
-    .challenge-box { background: #2a1a1a; border: 1px solid #e1306c; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
   </style>
 </head>
 <body>
@@ -34,11 +33,14 @@
     <label>Password</label>
     <input type="password" id="password" placeholder="password">
 
+    <label>OTP / 2FA / Challenge Code (agar maange toh)</label>
+    <input type="text" id="verification_code" placeholder="6 digit code (optional)">
+
     <label>Mode</label>
     <select id="mode" onchange="toggleMode()">
       <option value="users">Flood Users</option>
       <option value="group">Flood Group Thread</option>
-      <option value="list">List My Threads (get thread_id)</option>
+      <option value="list">List My Threads</option>
     </select>
 
     <div id="usersBox">
@@ -59,14 +61,6 @@
       <input type="number" id="count" value="1" min="1">
     </div>
 
-    <!-- Challenge box (hidden by default) -->
-    <div id="challengeBox" class="challenge-box hidden">
-      <label>Challenge / OTP Code</label>
-      <input type="text" id="challenge_code" placeholder="6 digit code">
-      <input type="hidden" id="session_id">
-      <button onclick="submitChallenge()">Submit Challenge</button>
-    </div>
-
     <button id="btn" onclick="startFlood()">Start</button>
     <div class="msg" id="status"></div>
     <div id="threadList"></div>
@@ -80,7 +74,6 @@
       document.getElementById("messageBox").classList.toggle("hidden", mode === "list");
       document.getElementById("threadList").innerHTML = "";
       document.getElementById("status").textContent = "";
-      document.getElementById("challengeBox").classList.add("hidden");
     }
 
     async function startFlood() {
@@ -90,11 +83,11 @@
       btn.disabled = true;
       status.textContent = "Working...";
       threadList.innerHTML = "";
-      document.getElementById("challengeBox").classList.add("hidden");
 
       const payload = {
         username: document.getElementById("username").value,
         password: document.getElementById("password").value,
+        verification_code: document.getElementById("verification_code").value,
         mode: document.getElementById("mode").value,
         targets: document.getElementById("targets").value,
         thread_id: document.getElementById("thread_id").value,
@@ -110,13 +103,10 @@
         });
         const data = await res.json();
 
-        if (data.challenge) {
-          // challenge aaya
-          document.getElementById("session_id").value = data.session_id;
-          document.getElementById("challengeBox").classList.remove("hidden");
-          status.textContent = data.msg;
+        if (data.need_code) {
+          status.textContent = data.msg + "\n\nCode daal ke phir se Start daba.";
         } else if (payload.mode === "list" && data.ok) {
-          status.textContent = "Threads loaded. Click any to copy thread_id";
+          status.textContent = "Threads loaded. Click karke thread_id copy kar.";
           data.threads.forEach(t => {
             const div = document.createElement("div");
             div.className = "thread-item";
@@ -127,7 +117,7 @@
               document.getElementById("thread_id").value = t.thread_id;
               document.getElementById("mode").value = "group";
               toggleMode();
-              status.textContent = "Thread ID copied. Ab Flood Group mode me Start daba.";
+              status.textContent = "Thread ID fill ho gaya. Ab message daal ke Start daba.";
             };
             threadList.appendChild(div);
           });
@@ -135,62 +125,9 @@
           status.textContent = data.msg;
         }
       } catch (e) {
-        status.textContent = "Error connecting to server";
+        status.textContent = "Server error";
       }
       btn.disabled = false;
-    }
-
-    async function submitChallenge() {
-      const status = document.getElementById("status");
-      status.textContent = "Submitting challenge...";
-
-      const payload = {
-        username: document.getElementById("username").value,
-        password: document.getElementById("password").value,
-        mode: document.getElementById("mode").value,
-        targets: document.getElementById("targets").value,
-        thread_id: document.getElementById("thread_id").value,
-        message: document.getElementById("message").value,
-        count: document.getElementById("count").value,
-        challenge_code: document.getElementById("challenge_code").value,
-        session_id: document.getElementById("session_id").value
-      };
-
-      try {
-        const res = await fetch("/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        if (data.ok) {
-          document.getElementById("challengeBox").classList.add("hidden");
-          status.textContent = data.msg;
-
-          if (payload.mode === "list" && data.threads) {
-            const threadList = document.getElementById("threadList");
-            data.threads.forEach(t => {
-              const div = document.createElement("div");
-              div.className = "thread-item";
-              div.innerHTML = `<div><b>${t.title}</b></div>
-                               <div class="thread-id">${t.thread_id}</div>
-                               <div style="color:#888;margin-top:4px">${t.users}</div>`;
-              div.onclick = () => {
-                document.getElementById("thread_id").value = t.thread_id;
-                document.getElementById("mode").value = "group";
-                toggleMode();
-                status.textContent = "Thread ID copied.";
-              };
-              threadList.appendChild(div);
-            });
-          }
-        } else {
-          status.textContent = data.msg;
-        }
-      } catch (e) {
-        status.textContent = "Error submitting challenge";
-      }
     }
   </script>
 </body>
